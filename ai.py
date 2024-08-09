@@ -79,6 +79,7 @@ class SuperTicTacToe:
             print("-" * 13)
 
 # Define the DQN model
+# Define the DQN model with increased learning rate and larger batch size
 class DQN:
     def __init__(self, state_size, action_size):
         self.state_size = state_size
@@ -88,13 +89,13 @@ class DQN:
         self.epsilon = 1.0  # Exploration rate
         self.epsilon_min = 0.01
         self.epsilon_decay = 0.995
-        self.learning_rate = 0.001
+        self.learning_rate = 0.005  # Increased learning rate
         self.model = self._build_model()
 
     def _build_model(self):
         model = Sequential()
-        model.add(Dense(128, input_dim=self.state_size, activation='relu'))
-        model.add(Dense(128, activation='relu'))
+        model.add(Dense(256, input_dim=self.state_size, activation='relu'))  # Larger network
+        model.add(Dense(256, activation='relu'))
         model.add(Dense(self.action_size, activation='linear'))
         model.compile(loss='mean_squared_error', optimizer=Adam(learning_rate=self.learning_rate))
         return model
@@ -102,11 +103,27 @@ class DQN:
     def remember(self, state, action, reward, next_state, done):
         self.memory.append((state, action, reward, next_state, done))
 
-    def act(self, state):
-        if np.random.rand() <= self.epsilon:
-            return random.randrange(self.action_size)
-        act_values = self.model.predict(state)
-        return np.argmax(act_values[0])
+    def act(self, state, env):
+        valid_move = False
+        while not valid_move:
+            if np.random.rand() <= self.epsilon:
+                action = random.randrange(self.action_size)
+            else:
+                act_values = self.model.predict(state)
+                action = np.argmax(act_values[0])
+
+            small_row = (action // 9) % 3
+            small_col = action % 3
+            large_row = env.last_move[0]
+            large_col = env.last_move[1]
+
+            # Check if the chosen move is valid
+            if env.large_board[large_row, large_col][small_row, small_col] == 0:
+                valid_move = True
+            else:
+                print(f"AI attempted invalid move at ({small_row}, {small_col}) in mini-grid ({large_row}, {large_col}). Re-selecting...")
+
+        return action
 
     def replay(self, batch_size):
         minibatch = random.sample(self.memory, batch_size)
@@ -146,12 +163,17 @@ def human_move(env):
             print("Invalid input, try again.")
 
 # Train the model
-def train_model(agent, env, episodes=1000, batch_size=32):
+def train_model(agent, env, episodes=1000, batch_size=64, patience=100):
+    best_reward = -float('inf')
+    patience_counter = 0
+
     for e in range(episodes):
         state = env.reset()
         state = np.reshape(state, [1, agent.state_size])
+        total_reward = 0
+
         for time in range(500):
-            action = agent.act(state)
+            action = agent.act(state, env)
             large_row = env.last_move[0]
             large_col = env.last_move[1]
             small_row = action // 9
@@ -161,16 +183,34 @@ def train_model(agent, env, episodes=1000, batch_size=32):
             next_state = np.reshape(next_state, [1, agent.state_size])
             agent.remember(state, action, reward, next_state, done)
             state = next_state
-            if done or reward == 1 or reward == -1:
+            total_reward += reward
+            if done:
                 break
             if len(agent.memory) > batch_size:
                 agent.replay(batch_size)
+
+        # Check if we have a new best reward
+        if total_reward > best_reward:
+            best_reward = total_reward
+            patience_counter = 0
+            print(f"New best reward: {best_reward} at episode {e+1}")
+        else:
+            patience_counter += 1
+
+        print(f"Episode {e+1}/{episodes}, Total Reward: {total_reward}, Patience: {patience_counter}/{patience}")
+
+        # If we've exceeded patience, stop training
+        if patience_counter >= patience:
+            print("Early stopping triggered!")
+            break
+
+        # Decay epsilon after each episode
         if agent.epsilon > agent.epsilon_min:
             agent.epsilon *= agent.epsilon_decay
-        print(f"Episode {e+1}/{episodes} finished.")
 
 # Play the game against the trained AI
 # Play the game against the trained AI
+# Correct action mapping and move validation
 def play_against_ai(agent, env):
     state = env.reset()
     state = np.reshape(state, [1, agent.state_size])
@@ -178,12 +218,13 @@ def play_against_ai(agent, env):
         env.render()  # Display the board
         if env.current_player == 1:
             print("AI's turn.")
-            action = agent.act(state)
+            action = agent.act(state, env)
+            small_row = (action // 9) % 3
+            small_col = action % 3
             large_row = env.last_move[0]
             large_col = env.last_move[1]
-            small_row = action // 9
-            small_col = action % 9
             print(f"AI chooses position ({small_row}, {small_col}) in mini-grid ({large_row}, {large_col}).")
+
             next_state, reward, done = env.make_move(large_row, large_col, small_row, small_col)
             print(f"Reward received: {reward}, Done: {done}")
             next_state = np.reshape(next_state, [1, agent.state_size])
@@ -205,30 +246,6 @@ def play_against_ai(agent, env):
                 else:
                     print("It's a draw!")
                 break
-    state = env.reset()
-    state = np.reshape(state, [1, agent.state_size])
-    while not env.done:
-        env.render()
-        if env.current_player == 1:
-            action = agent.act(state)
-            large_row = env.last_move[0]
-            large_col = env.last_move[1]
-            small_row = action // 9
-            small_col = action % 9
-            next_state, reward, done = env.make_move(large_row, large_col, small_row, small_col)
-            next_state = np.reshape(next_state, [1, agent.state_size])
-            state = next_state
-            if done:
-                env.render()
-                print("AI wins!")
-                break
-        else:
-            state, reward, done = human_move(env)
-            state = np.reshape(state, [1, agent.state_size])
-            if done:
-                env.render()
-                print("You win!")
-                break
 
 if __name__ == "__main__":
     env = SuperTicTacToe()
@@ -236,11 +253,21 @@ if __name__ == "__main__":
     action_size = 81
     agent = DQN(state_size, action_size)
 
-    # # Train the model
-    # train_model(agent, env, episodes=1000, batch_size=32)
+    # Load the trained model if you want to continue training from an existing model
+    # agent.load("supertictactoe_dqn.keras")
 
-    # # Save the trained model
-    # agent.save("supertictactoe_dqn.keras")
+    # Train the model with early stopping
+    train_model(agent, env, episodes=1000, batch_size=64, patience=10)
+
+    # Save the trained model
+    agent.save("supertictactoe_dqn_2.keras")
+
+    # Play against the AI
+    play_against_ai(agent, env)
+    env = SuperTicTacToe()
+    state_size = 81
+    action_size = 81
+    agent = DQN(state_size, action_size)
 
     # Load the trained model
     agent.load("supertictactoe_dqn.keras")
